@@ -148,7 +148,7 @@ import:
   - go-binlog
   - go-tipb
 - package: github.com/pingcap/kvproto
-  version: b66543960fb3508671152f6c9f4a09ee9d7a2322
+  version: 612dc88f283dfc9078ba7e38b292112e5f7f0edd
 - package: github.com/gogo/protobuf
   version: ^0.3.0
   subpackages:
@@ -162,3 +162,4 @@ import:
   - rate
 - package: golang.org/x/sys
   version: 8d1157a435470616f975ff9bb013bea8d0962067
+- package: github.com/ngaut/kvproto

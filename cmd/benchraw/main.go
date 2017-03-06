@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,26 @@ var (
 	pdAddr    = flag.String("pd", "localhost:2379", "pd address:localhost:2379")
 	valueSize = flag.Int("V", 5, "value size in byte")
 )
+
+func testRawScan() {
+	cli, err := tikv.NewRawKVClient(strings.Split(*pdAddr, ","))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	step := 1
+
+	for i := 0; i < *dataCnt/step; i++ {
+		for j := 0; j < step; j++ {
+			kvs, err := cli.Scan(nil, []byte{0xFF}, 1)
+			if err != nil {
+				panic(err)
+			}
+			vs := strings.Split(string(kvs[j].Key), "_")
+			fmt.Println(strconv.Atoi(vs[1]))
+		}
+	}
+}
 
 // blind put bench
 func batchRawPut(value []byte) {
@@ -69,6 +90,7 @@ func main() {
 	value := make([]byte, *valueSize)
 	t := time.Now()
 	batchRawPut(value)
+	testRawScan()
 
 	fmt.Printf("\nelapse:%v, total %v\n", time.Since(t), *dataCnt)
 }

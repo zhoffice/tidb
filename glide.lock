@@ -1,5 +1,5 @@
-hash: 56cc4ff50dad17df74f930121017c4d3549339b022c7561575f095425c733d19
-updated: 2017-02-21T19:45:51.825820804+08:00
+hash: 19e585a28ae90e1303a0bbd34f6ff23e79d8c5dc1b70b487ce885108e19603d2
+updated: 2017-03-06T12:37:59.753579869+08:00
 imports:
 - name: bitbucket.org/ww/goautoneg
   version: 75cd24fc2f2c2a2088577d12123ddee5f54e0675
@@ -68,6 +68,8 @@ imports:
   - pbutil
 - name: github.com/ngaut/deadline
   version: fae8f9dfd7048de16575b9d4c255278e38c28a4f
+- name: github.com/ngaut/kvproto
+  version: 854b7eeb43e436a692463a18f03dabfe917ebe2b
 - name: github.com/ngaut/log
   version: cec23d3e10b016363780d894a0eb732a12c06e02
 - name: github.com/ngaut/pools
@@ -100,7 +102,7 @@ imports:
   - leveldb/table
   - leveldb/util
 - name: github.com/pingcap/kvproto
-  version: b66543960fb3508671152f6c9f4a09ee9d7a2322
+  version: 612dc88f283dfc9078ba7e38b292112e5f7f0edd
   subpackages:
   - pkg/coprocessor
   - pkg/eraftpb

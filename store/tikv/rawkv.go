@@ -48,6 +48,10 @@ func (c *RawKVClient) ClusterID() uint64 {
 	return c.clusterID
 }
 
+func (c *RawKVClient) Close() error {
+	return c.rpcClient.Close()
+}
+
 // Get queries value with the key. When the key does not exist, it returns
 // `nil, nil`, while `[]byte{}, nil` means an empty value.
 func (c *RawKVClient) Get(key []byte) ([]byte, error) {
@@ -72,6 +76,28 @@ func (c *RawKVClient) Get(key []byte) ([]byte, error) {
 		return nil, errors.New(cmdResp.GetError())
 	}
 	return cmdResp.Value, nil
+}
+
+// Scan
+func (c *RawKVClient) Scan(startKey, endKey []byte, limit uint64) ([]*kvrpcpb.KvPair, error) {
+	req := &kvrpcpb.Request{
+		Type: kvrpcpb.MessageType_CmdRawScan,
+		CmdRawScanReq: &kvrpcpb.CmdRawScanRequest{
+			StartKey: startKey,
+			EndKey:   endKey,
+			Limit:    &limit,
+		},
+	}
+	resp, err := c.sendKVReq(startKey, req)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	cmdResp := resp.GetCmdRawScanResp()
+	if cmdResp == nil {
+		return nil, errors.Trace(errBodyMissing)
+	}
+
+	return cmdResp.Pairs, nil
 }
 
 // Put stores a key-value pair to TiKV.
