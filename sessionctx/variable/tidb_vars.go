@@ -51,6 +51,10 @@ const (
 	// those indices can be scanned concurrently, with the cost of higher system performance impact.
 	TiDBBuildStatsConcurrency = "tidb_build_stats_concurrency"
 
+	// TiDBCurrentTS is used to get the current transaction timestamp.
+	// It is read-only.
+	TiDBCurrentTS = "tidb_current_ts"
+
 	/* Session and global */
 
 	// tidb_distsql_scan_concurrency is used to set the concurrency of a distsql scan task.
@@ -109,4 +113,5 @@ const (
 	DefOptAggPushDown             = true
 	DefOptInSubqUnfolding         = false
 	DefBatchInsert                = false
+	DefCurretTS                   = 0
 )
