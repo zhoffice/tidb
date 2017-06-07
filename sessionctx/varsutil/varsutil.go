@@ -107,6 +107,11 @@ func SetSessionSystemVar(vars *variable.SessionVars, name string, value types.Da
 		}
 		vars.SQLMode = sqlMode
 	case variable.TiDBSnapshot:
+		err = setSnapshotTSByDate(vars, sVal)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	case variable.TiDBSnapshotTS:
 		err = setSnapshotTS(vars, sVal)
 		if err != nil {
 			return errors.Trace(err)
@@ -181,7 +186,7 @@ func parseTimeZone(s string) (*time.Location, error) {
 	return nil, variable.ErrUnknownTimeZone.GenByArgs(s)
 }
 
-func setSnapshotTS(s *variable.SessionVars, sVal string) error {
+func setSnapshotTSByDate(s *variable.SessionVars, sVal string) error {
 	if sVal == "" {
 		s.SnapshotTS = 0
 		return nil
@@ -194,5 +199,15 @@ func setSnapshotTS(s *variable.SessionVars, sVal string) error {
 	t1, err := t.Time.GoTime(time.Local)
 	ts := (t1.UnixNano() / int64(time.Millisecond)) << epochShiftBits
 	s.SnapshotTS = uint64(ts)
+	return errors.Trace(err)
+}
+
+func setSnapshotTS(s *variable.SessionVars, sVal string) error {
+	if sVal == "" {
+		s.SnapshotTS = 0
+		return nil
+	}
+	ts, err := strconv.ParseUint(sVal, 10, 64)
+	s.SnapshotTS = ts
 	return errors.Trace(err)
 }
