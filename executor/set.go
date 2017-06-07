@@ -172,7 +172,7 @@ func (e *SetExecutor) getVarValue(v *expression.VarAssignment, sysVar *variable.
 }
 
 func (e *SetExecutor) loadSnapshotInfoSchemaIfNeeded(name string) error {
-	if name != variable.TiDBSnapshot {
+	if name != variable.TiDBSnapshot && name != variable.TiDBSnapshotTS {
 		return nil
 	}
 	vars := e.ctx.GetSessionVars()
