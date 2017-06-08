@@ -440,6 +440,9 @@ var tsoReqPool = sync.Pool{
 }
 
 func (c *client) GetTS(ctx context.Context) (int64, int64, error) {
+	start := time.Now()
+	defer func() { cmdDuration.WithLabelValues("tso").Observe(time.Since(start).Seconds()) }()
+
 	resp := c.GetTSAsync(ctx)
 	return resp.Wait()
 }
