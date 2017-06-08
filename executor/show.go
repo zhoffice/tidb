@@ -32,6 +32,8 @@ import (
 	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/charset"
 	"github.com/pingcap/tidb/util/types"
+
+	"github.com/ngaut/log"
 )
 
 // ShowExec represents a show executor.
@@ -403,6 +405,7 @@ func (e *ShowExec) fetchShowCreateTable() error {
 			} else {
 				buf.WriteString(" VIRTUAL")
 			}
+			log.Errorf("in show, expr not null: %t\n", col.GeneratedExpr != nil)
 		}
 		if mysql.HasAutoIncrementFlag(col.Flag) {
 			buf.WriteString(" NOT NULL AUTO_INCREMENT")
