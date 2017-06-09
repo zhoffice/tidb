@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/tidb/meta"
 	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/sessionctx/binloginfo"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/terror"
 	"github.com/twinj/uuid"
@@ -74,6 +75,8 @@ var (
 	errInvalidDefault        = terror.ClassDDL.New(codeInvalidDefault, "Invalid default value for '%s'")
 	errInvalidUseOfNull      = terror.ClassDDL.New(codeInvalidUseOfNull, "Invalid use of NULL value")
 
+	// errGeneratedColumnNonPrior forbiddens to refer generated column non prior to it.
+	errGeneratedColumnNonPrior = terror.ClassDDL.New(codeGeneratedColumnNonPrior, mysql.MySQLErrName[mysql.ErrGeneratedColumnNonPrior])
 	// errDependentByGeneratedColumn forbiddens to delete columns which are dependent by generated columns.
 	errDependentByGeneratedColumn = terror.ClassDDL.New(codeDependentByGeneratedColumn, mysql.MySQLErrName[mysql.ErrDependentByGeneratedColumn])
 	// errJSONUsedAsKey forbiddens to use JSON as key or index.
@@ -139,6 +142,8 @@ type DDL interface {
 	SchemaSyncer() SchemaSyncer
 	// OwnerManager gets the owner manager, and it's used for testing.
 	OwnerManager() OwnerManager
+	// WorkerVars gets the session variables for DDL worker.
+	WorkerVars() *variable.SessionVars
 }
 
 // Event is an event that a ddl operation happened.
@@ -192,6 +197,8 @@ type ddl struct {
 
 	quitCh chan struct{}
 	wait   sync.WaitGroup
+
+	workerVars *variable.SessionVars
 }
 
 // RegisterEventCh registers passed channel for ddl Event.
@@ -259,7 +266,9 @@ func newDDL(ctx goctx.Context, etcdCli *clientv3.Client, store kv.Storage,
 		bgJobCh:      make(chan struct{}, 1),
 		ownerManager: manager,
 		schemaSyncer: syncer,
+		workerVars:   variable.NewSessionVars(),
 	}
+	d.workerVars.BinlogClient = binloginfo.GetPumpClient()
 
 	d.start(ctx)
 
@@ -312,7 +321,7 @@ func (d *ddl) Stop() error {
 
 func (d *ddl) start(ctx goctx.Context) {
 	d.quitCh = make(chan struct{})
-	d.ownerManager.CampaignOwners(ctx, &d.wait)
+	d.ownerManager.CampaignOwners(ctx)
 
 	d.wait.Add(2)
 	go d.onBackgroundWorker()
@@ -477,6 +486,10 @@ func (d *ddl) setHook(h Callback) {
 	d.hook = h
 }
 
+func (d *ddl) WorkerVars() *variable.SessionVars {
+	return d.workerVars
+}
+
 func filterError(err, exceptErr error) error {
 	if terror.ErrorEqual(err, exceptErr) {
 		return nil
@@ -527,6 +540,7 @@ const (
 	codeInvalidUseOfNull           = 1138
 	codeBlobKeyWithoutLength       = 1170
 	codeInvalidOnUpdate            = 1294
+	codeGeneratedColumnNonPrior    = 3107
 	codeDependentByGeneratedColumn = 3108
 	codeJSONUsedAsKey              = 3152
 	codeBlobCantHaveDefault        = 1101
@@ -551,6 +565,7 @@ func init() {
 		codeBadField:                   mysql.ErrBadField,
 		codeInvalidDefault:             mysql.ErrInvalidDefault,
 		codeInvalidUseOfNull:           mysql.ErrInvalidUseOfNull,
+		codeGeneratedColumnNonPrior:    mysql.ErrGeneratedColumnNonPrior,
 		codeDependentByGeneratedColumn: mysql.ErrDependentByGeneratedColumn,
 		codeJSONUsedAsKey:              mysql.ErrJSONUsedAsKey,
 		codeBlobCantHaveDefault:        mysql.ErrBlobCantHaveDefault,
