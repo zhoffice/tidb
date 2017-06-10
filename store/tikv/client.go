@@ -108,6 +108,7 @@ func (c *Conn) sendRawPut(req *kvrpcpb.RawPutRequest, ch chan<- *kvrpcpb.RawResp
 					delete(c.pending, resp.MsgId)
 					ch <- resp
 				}
+				c.mu.Unlock()
 			}
 		}()
 		c.stream = stream
