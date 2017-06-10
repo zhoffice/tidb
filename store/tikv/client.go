@@ -20,6 +20,7 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/juju/errors"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	goctx "golang.org/x/net/context"
@@ -49,12 +50,87 @@ type Client interface {
 	SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request) (*tikvrpc.Response, error)
 }
 
+type Conn struct {
+	conn    *grpc.ClientConn
+	mu      sync.Mutex
+	msgID   uint64
+	pending map[uint64]chan<- *kvrpcpb.RawResponse
+	stream  tikvpb.Tikv_RawStreamClient
+}
+
+func newConn(addr string) (*Conn, error) {
+	conn, err := grpc.Dial(
+		addr,
+		grpc.WithInsecure(),
+		grpc.WithTimeout(dialTimeout),
+		grpc.WithInitialWindowSize(grpcInitialWindowSize),
+		grpc.WithInitialConnWindowSize(grpcInitialConnWindowSize),
+		grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor),
+		grpc.WithStreamInterceptor(grpc_prometheus.StreamClientInterceptor))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return &Conn{
+		conn:    conn,
+		pending: make(map[uint64]chan<- *kvrpcpb.RawResponse),
+	}, nil
+}
+
+func (c *Conn) RawPut(req *kvrpcpb.RawPutRequest) (*kvrpcpb.RawPutResponse, error) {
+	ch := make(chan *kvrpcpb.RawResponse, 1)
+	if err := c.sendRawPut(req, ch); err != nil {
+		return nil, errors.Trace(err)
+	}
+	select {
+	case <-time.After(time.Second * 5):
+		return nil, errors.New("timeout")
+	case res := <-ch:
+		return res.RawPut, nil
+	}
+}
+
+func (c *Conn) sendRawPut(req *kvrpcpb.RawPutRequest, ch chan<- *kvrpcpb.RawResponse) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stream == nil {
+		stream, err := tikvpb.NewTikvClient(c.conn).RawStream(goctx.TODO())
+		if err != nil {
+			return errors.Trace(err)
+		}
+		go func() {
+			for {
+				resp, err := stream.Recv()
+				if err != nil {
+					return
+				}
+				c.mu.Lock()
+				if ch, ok := c.pending[resp.MsgId]; ok {
+					delete(c.pending, resp.MsgId)
+					ch <- resp
+				}
+			}
+		}()
+		c.stream = stream
+	}
+	c.msgID++
+	c.pending[c.msgID] = ch
+	err := c.stream.Send(&kvrpcpb.RawRequest{
+		MsgId:  c.msgID,
+		RawPut: req,
+	})
+	return errors.Trace(err)
+}
+
+func (c *Conn) Close() {
+	c.conn.Close()
+}
+
 type connArray struct {
 	lock    *sync.Mutex
 	addr    string
 	maxSize uint32
 	index   uint32
-	v       []*grpc.ClientConn
+	v       []*Conn
 }
 
 func newConnArray(maxSize uint32, addr string) *connArray {
@@ -63,24 +139,17 @@ func newConnArray(maxSize uint32, addr string) *connArray {
 		addr:    addr,
 		maxSize: maxSize,
 		index:   0,
-		v:       make([]*grpc.ClientConn, maxSize),
+		v:       make([]*Conn, maxSize),
 	}
 }
 
-func (a *connArray) Get() (*grpc.ClientConn, error) {
+func (a *connArray) Get() (*Conn, error) {
 	a.lock.Lock()
 	defer a.lock.Unlock()
 	conn := a.v[a.index]
 	if conn == nil {
 		var err error
-		conn, err = grpc.Dial(
-			a.addr,
-			grpc.WithInsecure(),
-			grpc.WithTimeout(dialTimeout),
-			grpc.WithInitialWindowSize(grpcInitialWindowSize),
-			grpc.WithInitialConnWindowSize(grpcInitialConnWindowSize),
-			grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor),
-			grpc.WithStreamInterceptor(grpc_prometheus.StreamClientInterceptor))
+		conn, err = newConn(a.addr)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -118,7 +187,7 @@ func newRPCClient() *rpcClient {
 	}
 }
 
-func (c *rpcClient) getConn(addr string) (*grpc.ClientConn, error) {
+func (c *rpcClient) getConn(addr string) (*Conn, error) {
 	c.RLock()
 	if c.isClosed {
 		c.RUnlock()
@@ -172,15 +241,15 @@ func (c *rpcClient) SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	client := tikvpb.NewTikvClient(conn)
-	resp, err := c.callRPC(ctx, client, req)
+	resp, err := c.callRPC(ctx, conn, req)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	return resp, nil
 }
 
-func (c *rpcClient) callRPC(ctx goctx.Context, client tikvpb.TikvClient, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+func (c *rpcClient) callRPC(ctx goctx.Context, conn *Conn, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+	client := tikvpb.NewTikvClient(conn.conn)
 	resp := &tikvrpc.Response{}
 	resp.Type = req.Type
 	switch req.Type {
@@ -262,7 +331,7 @@ func (c *rpcClient) callRPC(ctx goctx.Context, client tikvpb.TikvClient, req *ti
 		resp.RawGet = r
 		return resp, nil
 	case tikvrpc.CmdRawPut:
-		r, err := client.RawPut(ctx, req.RawPut)
+		r, err := conn.RawPut(req.RawPut)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
