@@ -18,6 +18,8 @@ import (
 
 	"github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/juju/errors"
+	"github.com/pingcap/kvproto/pkg/tikvpb"
+	goctx "golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -26,8 +28,9 @@ const defaultBufSize = 4 * 1024
 // Conn is a simple wrapper of grpc.ClientConn.
 type Conn struct {
 	*grpc.ClientConn
-	addr   string
-	closed bool
+	rawStream tikvpb.Tikv_RawStreamClient
+	addr      string
+	closed    bool
 }
 
 // NewConnection creates a Conn with dial timeout.
@@ -44,8 +47,15 @@ func NewConnection(addr string, dialTimeout time.Duration) (*Conn, error) {
 		return nil, errors.Trace(err)
 	}
 
+	client := tikvpb.NewTikvClient(conn)
+	rawStream, err := client.RawStream(goctx.TODO())
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	return &Conn{
 		ClientConn: conn,
+		rawStream:  rawStream,
 		addr:       addr,
 		closed:     false,
 	}, nil

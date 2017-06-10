@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/kvproto/pkg/tikvpb"
 	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	goctx "golang.org/x/net/context"
@@ -79,8 +80,7 @@ func (c *rpcClient) SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request
 	connPoolHistogram.WithLabelValues(label).Observe(time.Since(start).Seconds())
 	defer c.p.PutConn(conn)
 
-	client := tikvpb.NewTikvClient(conn.ClientConn)
-	resp, err := c.callRPC(ctx, client, req)
+	resp, err := c.callRPC(ctx, conn, req)
 	if err != nil {
 		conn.Close()
 		return nil, errors.Trace(err)
@@ -88,7 +88,8 @@ func (c *rpcClient) SendReq(ctx goctx.Context, addr string, req *tikvrpc.Request
 	return resp, nil
 }
 
-func (c *rpcClient) callRPC(ctx goctx.Context, client tikvpb.TikvClient, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+func (c *rpcClient) callRPC(ctx goctx.Context, conn *Conn, req *tikvrpc.Request) (*tikvrpc.Response, error) {
+	client := tikvpb.NewTikvClient(conn.ClientConn)
 	resp := &tikvrpc.Response{}
 	resp.Type = req.Type
 	switch req.Type {
@@ -170,11 +171,17 @@ func (c *rpcClient) callRPC(ctx goctx.Context, client tikvpb.TikvClient, req *ti
 		resp.RawGet = r
 		return resp, nil
 	case tikvrpc.CmdRawPut:
-		r, err := client.RawPut(ctx, req.RawPut)
+		err := conn.rawStream.Send(&kvrpcpb.RawRequest{
+			RawPut: req.RawPut,
+		})
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		resp.RawPut = r
+		r, err := conn.rawStream.Recv()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		resp.RawPut = r.RawPut
 		return resp, nil
 	case tikvrpc.CmdRawDelete:
 		r, err := client.RawDelete(ctx, req.RawDelete)
