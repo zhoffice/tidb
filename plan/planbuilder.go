@@ -791,29 +791,30 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 	}
 
 	// Calculate generated columns if (1) it's stored or (2) there are indices on that.
-	// create table x (a int, b int, c as (a+b));
-	// insert into x values (1, 1) -- should fail;
-	// insert into x select (1, 1) -- should fail;
-	/*
-		for _, column := range insertPlan.Table.Cols() {
-			if len(column.GeneratedExprString) != 0 {
-				expr, _, err := b.rewrite(column.GeneratedExpr, mockTablePlan, nil, true)
-				if err != nil {
-					b.err = errors.Trace(err)
-					return nil
+	for _, column := range insertPlan.Table.Cols() {
+		// TODO: if there are indices on generated column, we should also calculate that.
+		if len(column.GeneratedExprString) != 0 && column.GeneratedStored {
+			if insertPlan.GenCols == nil {
+				insertPlan.GenCols = new(InsertGeneratedColumns)
+			}
+			expr, _, err := b.rewrite(column.GeneratedExpr, mockTablePlan, nil, true)
+			if err != nil {
+				b.err = errors.Trace(err)
+				return nil
+			}
+			// here we only store the expression, we'll eval that in executor.
+			if len(insertPlan.Columns) != 0 {
+				columnName := &ast.ColumnName{Name: column.Name}
+				columnName.SetText(column.Name.O)
+				insertPlan.GenCols.Columns = append(insertPlan.GenCols.Columns, columnName)
+				for i, exprList := range insertPlan.GenCols.Lists {
+					insertPlan.GenCols.Lists[i] = append(exprList, expr)
 				}
-				log.Errorf("expr: %s\n", expr.String())
-				if len(insertPlan.Columns) != 0 {
-					columnName := &ast.ColumnName{Name: column.Name}
-					columnName.SetText(column.Name.O)
-					insertPlan.Columns = append(insertPlan.Columns, columnName)
-					for i, exprList := range insertPlan.Lists {
-						insertPlan.Lists[i] = append(exprList, expr)
-					}
-				}
+			} else {
+				// for insert ... setlist.
 			}
 		}
-	*/
+	}
 
 	insertPlan.SetSchema(expression.NewSchema())
 	return insertPlan

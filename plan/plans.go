@@ -107,6 +107,15 @@ type Simple struct {
 	Statement ast.StmtNode
 }
 
+// GeneratedColumns is for completing generated columns in Insert.
+// We resolve generation expressions in plan, and eval those in executor.
+type InsertGeneratedColumns struct {
+	Columns     []*ast.ColumnName
+	Lists       [][]expression.Expression
+	Setlist     []*expression.Assignment
+	OnDuplicate []*expression.Assignment
+}
+
 // Insert represents an insert plan.
 type Insert struct {
 	*basePlan
@@ -123,6 +132,7 @@ type Insert struct {
 	IsReplace bool
 	Priority  int
 	Ignore    bool
+	GenCols   *InsertGeneratedColumns
 }
 
 // AnalyzePKTask is used for analyze pk. Used only when pk is handle.

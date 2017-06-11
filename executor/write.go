@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/mysql"
+	"github.com/pingcap/tidb/plan"
 	"github.com/pingcap/tidb/table"
 	"github.com/pingcap/tidb/terror"
 	"github.com/pingcap/tidb/util/types"
@@ -596,6 +597,8 @@ type InsertValues struct {
 	Lists     [][]expression.Expression
 	Setlist   []*expression.Assignment
 	IsPrepare bool
+
+	GenValues *plan.InsertGeneratedColumns
 }
 
 // InsertExec represents an insert executor.
@@ -744,6 +747,11 @@ func (e *InsertValues) getColumns(tableCols []*table.Column) ([]*table.Column, e
 		for _, v := range e.Columns {
 			columns = append(columns, v.Name.O)
 		}
+		if e.GenValues != nil {
+			for _, v := range e.GenValues.Columns {
+				columns = append(columns, v.Name.O)
+			}
+		}
 		cols, err = table.FindCols(tableCols, columns)
 		if err != nil {
 			return nil, errors.Errorf("INSERT INTO %s: %s", e.Table.Meta().Name.O, err)
@@ -806,6 +814,9 @@ func (e *InsertValues) getRows(cols []*table.Column) (rows [][]types.Datum, err 
 	rows = make([][]types.Datum, len(e.Lists))
 	length := len(e.Lists[0])
 	for i, list := range e.Lists {
+		if e.GenValues != nil {
+			list = append(list, e.GenValues.Lists[i]...)
+		}
 		if err = e.checkValueCount(length, len(list), i, cols); err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -820,14 +831,30 @@ func (e *InsertValues) getRows(cols []*table.Column) (rows [][]types.Datum, err 
 
 func (e *InsertValues) getRow(cols []*table.Column, list []expression.Expression) ([]types.Datum, error) {
 	vals := make([]types.Datum, len(list))
-	for i, expr := range list {
+	for i, expr := range list[0:len(e.Columns)] {
 		val, err := expr.Eval(nil)
 		vals[i] = val
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 	}
-	return e.fillRowData(cols, vals, false)
+	datums, err := e.fillRowData(cols, vals, false)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// For generated column, we should eval expr with a datum list
+	// which has same schema with e.Table. And, we can eval them one
+	// by one, because they can only refer generated columns occurring
+	// earilier in the table.
+	for i, expr := range list[len(e.Columns):] {
+		val, err := expr.Eval(datums)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		offset := cols[len(e.Columns)+i].Offset
+		datums[offset] = val
+	}
+	return datums, nil
 }
 
 func (e *InsertValues) getRowsSelect(cols []*table.Column) ([][]types.Datum, error) {
