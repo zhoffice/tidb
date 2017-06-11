@@ -107,7 +107,7 @@ type Simple struct {
 	Statement ast.StmtNode
 }
 
-// GeneratedColumns is for completing generated columns in Insert.
+// InsertGeneratedColumns is for completing generated columns in Insert.
 // We resolve generation expressions in plan, and eval those in executor.
 type InsertGeneratedColumns struct {
 	Columns []*ast.ColumnName
