@@ -813,6 +813,9 @@ func (e *InsertValues) getRows(cols []*table.Column) (rows [][]types.Datum, err 
 
 	rows = make([][]types.Datum, len(e.Lists))
 	length := len(e.Lists[0])
+	if e.GenValues != nil {
+		length += len(e.GenValues.Lists[0])
+	}
 	for i, list := range e.Lists {
 		if e.GenValues != nil {
 			list = append(list, e.GenValues.Lists[i]...)
@@ -966,6 +969,9 @@ func (e *InsertValues) initDefaultValues(row []types.Datum, marked map[int]struc
 			if !e.ctx.GetSessionVars().RetryInfo.Retrying {
 				e.ctx.GetSessionVars().RetryInfo.AddAutoIncrementID(recordID)
 			}
+		} else if len(c.GeneratedExprString) != 0 {
+			// just leave generated column as null.
+			row[i].SetNull()
 		} else {
 			var err error
 			row[i], err = table.GetColDefaultValue(e.ctx, c.ToInfo())

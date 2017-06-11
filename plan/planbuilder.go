@@ -795,7 +795,11 @@ func (b *planBuilder) buildInsert(insert *ast.InsertStmt) Plan {
 		// TODO: if there are indices on generated column, we should also calculate that.
 		if len(column.GeneratedExprString) != 0 && column.GeneratedStored {
 			if insertPlan.GenCols == nil {
-				insertPlan.GenCols = new(InsertGeneratedColumns)
+				insertPlan.GenCols = &InsertGeneratedColumns{
+					Columns: make([]*ast.ColumnName, 0),
+					Lists:   make([][]expression.Expression, len(insertPlan.Lists)),
+					Setlist: make([]*expression.Assignment, 0),
+				}
 			}
 			expr, _, err := b.rewrite(column.GeneratedExpr, mockTablePlan, nil, true)
 			if err != nil {

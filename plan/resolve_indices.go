@@ -244,6 +244,13 @@ func (p *Insert) ResolveIndices() {
 	for _, asgn := range p.OnDuplicate {
 		asgn.Expr.ResolveIndices(p.tableSchema)
 	}
+	if p.GenCols != nil {
+		for _, list := range p.GenCols.Lists {
+			for _, expr := range list {
+				expr.ResolveIndices(p.tableSchema)
+			}
+		}
+	}
 }
 
 // ResolveIndices implements Plan interface.
