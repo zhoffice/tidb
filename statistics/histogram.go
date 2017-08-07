@@ -21,6 +21,7 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/pingcap/tidb/context"
+	"github.com/pingcap/tidb/model"
 	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/util/codec"
@@ -86,11 +87,13 @@ func (hg *Histogram) SaveToStorage(ctx context.Context, tableID int64, count int
 		} else {
 			count = bucket.Count - hg.Buckets[i-1].Count
 		}
-		upperBound, err := bucket.UpperBound.ConvertTo(ctx.GetSessionVars().StmtCtx, types.NewFieldType(mysql.TypeBlob))
+		var upperBound types.Datum
+		upperBound, err = bucket.UpperBound.ConvertTo(ctx.GetSessionVars().StmtCtx, types.NewFieldType(mysql.TypeBlob))
 		if err != nil {
 			return errors.Trace(err)
 		}
-		lowerBound, err := bucket.LowerBound.ConvertTo(ctx.GetSessionVars().StmtCtx, types.NewFieldType(mysql.TypeBlob))
+		var lowerBound types.Datum
+		lowerBound, err = bucket.LowerBound.ConvertTo(ctx.GetSessionVars().StmtCtx, types.NewFieldType(mysql.TypeBlob))
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -104,9 +107,9 @@ func (hg *Histogram) SaveToStorage(ctx context.Context, tableID int64, count int
 	return errors.Trace(err)
 }
 
-func (h *Handle) histogramFromStorage(tableID int64, colID int64, tp *types.FieldType, distinct int64, isIndex int, ver uint64, nullCount int64) (*Histogram, error) {
+func histogramFromStorage(ctx context.Context, tableID int64, colID int64, tp *types.FieldType, distinct int64, isIndex int, ver uint64, nullCount int64) (*Histogram, error) {
 	selSQL := fmt.Sprintf("select bucket_id, count, repeats, lower_bound, upper_bound from mysql.stats_buckets where table_id = %d and is_index = %d and hist_id = %d", tableID, isIndex, colID)
-	rows, _, err := h.ctx.(sqlexec.RestrictedSQLExecutor).ExecRestrictedSQL(h.ctx, selSQL)
+	rows, _, err := ctx.(sqlexec.RestrictedSQLExecutor).ExecRestrictedSQL(ctx, selSQL)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -126,11 +129,11 @@ func (h *Handle) histogramFromStorage(tableID int64, colID int64, tp *types.Fiel
 		if isIndex == 1 {
 			lowerBound, upperBound = rows[i].Data[3], rows[i].Data[4]
 		} else {
-			lowerBound, err = rows[i].Data[3].ConvertTo(h.ctx.GetSessionVars().StmtCtx, tp)
+			lowerBound, err = rows[i].Data[3].ConvertTo(ctx.GetSessionVars().StmtCtx, tp)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			upperBound, err = rows[i].Data[4].ConvertTo(h.ctx.GetSessionVars().StmtCtx, tp)
+			upperBound, err = rows[i].Data[4].ConvertTo(ctx.GetSessionVars().StmtCtx, tp)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -237,7 +240,7 @@ func (hg *Histogram) lessRowCount(sc *variable.StatementContext, value types.Dat
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	if c < 0 {
+	if c <= 0 {
 		return prevCount, nil
 	}
 	return (prevCount + lessThanBucketValueCount) / 2, nil
@@ -336,6 +339,7 @@ func (hg *Histogram) getIncreaseFactor(totalCount int64) float64 {
 // Column represents a column histogram.
 type Column struct {
 	Histogram
+	Info *model.ColumnInfo
 }
 
 func (c *Column) String() string {
@@ -359,7 +363,7 @@ func (c *Column) getIntColumnRowCount(sc *variable.StatementContext, intRanges [
 			if rg.LowVal == rg.HighVal {
 				cnt, err = c.equalRowCount(sc, types.NewIntDatum(rg.LowVal))
 			} else {
-				cnt, err = c.betweenRowCount(sc, types.NewIntDatum(rg.LowVal), types.NewIntDatum(rg.HighVal))
+				cnt, err = c.betweenRowCount(sc, types.NewIntDatum(rg.LowVal), types.NewIntDatum(rg.HighVal+1))
 			}
 		}
 		if err != nil {
@@ -376,20 +380,69 @@ func (c *Column) getIntColumnRowCount(sc *variable.StatementContext, intRanges [
 	return rowCount, nil
 }
 
+// getColumnRowCount estimates the row count by a slice of ColumnRange.
+func (c *Column) getColumnRowCount(sc *variable.StatementContext, ranges []*types.ColumnRange) (float64, error) {
+	var rowCount float64
+	for _, rg := range ranges {
+		cmp, err := rg.Low.CompareDatum(sc, rg.High)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		if cmp == 0 {
+			// the point case.
+			if !rg.LowExcl && !rg.HighExcl {
+				var cnt float64
+				cnt, err = c.equalRowCount(sc, rg.Low)
+				if err != nil {
+					return 0, errors.Trace(err)
+				}
+				rowCount += cnt
+			}
+			continue
+		}
+		// the interval case.
+		cnt, err := c.betweenRowCount(sc, rg.Low, rg.High)
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		if rg.LowExcl {
+			lowCnt, err := c.equalRowCount(sc, rg.Low)
+			if err != nil {
+				return 0, errors.Trace(err)
+			}
+			cnt -= lowCnt
+		}
+		if !rg.HighExcl {
+			highCnt, err := c.equalRowCount(sc, rg.High)
+			if err != nil {
+				return 0, errors.Trace(err)
+			}
+			cnt += highCnt
+		}
+		rowCount += cnt
+	}
+	if rowCount > c.totalRowCount() {
+		rowCount = c.totalRowCount()
+	} else if rowCount < 0 {
+		rowCount = 0
+	}
+	return rowCount, nil
+}
+
 // Index represents an index histogram.
 type Index struct {
 	Histogram
-	NumColumns int
+	Info *model.IndexInfo
 }
 
 func (idx *Index) String() string {
 	return idx.Histogram.toString(true)
 }
 
-func (idx *Index) getRowCount(sc *variable.StatementContext, indexRanges []*types.IndexRange, inAndEQCnt int) (float64, error) {
+func (idx *Index) getRowCount(sc *variable.StatementContext, indexRanges []*types.IndexRange) (float64, error) {
 	totalCount := float64(0)
 	for _, indexRange := range indexRanges {
-		indexRange.Align(idx.NumColumns)
+		indexRange.Align(len(idx.Info.Columns))
 		lb, err := codec.EncodeKey(nil, indexRange.LowVal...)
 		if err != nil {
 			return 0, errors.Trace(err)
